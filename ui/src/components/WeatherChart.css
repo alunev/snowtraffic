@@ -1,0 +1,151 @@
+.weather-chart-container {
+  background: white;
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin: 2rem 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.weather-chart-header {
+  margin-bottom: 1.5rem;
+}
+
+.chart-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.weather-chart-header h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0;
+}
+
+.time-range-selector {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.time-range-selector button {
+  padding: 0.5rem 1rem;
+  border: 1px solid #e2e8f0;
+  background: white;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.time-range-selector button:hover {
+  border-color: #3b82f6;
+  color: #3b82f6;
+}
+
+.time-range-selector button.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: white;
+}
+
+.weather-stats {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  padding: 1rem;
+  background: #f8fafc;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  color: #64748b;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stat-value {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.stat-ratio {
+  font-size: 0.875rem;
+  color: #3b82f6;
+  font-weight: 600;
+}
+
+.weather-chart-note {
+  margin-top: 1rem;
+  font-size: 0.75rem;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.weather-chart-loading {
+  text-align: center;
+  padding: 2rem;
+  color: #64748b;
+  font-size: 0.875rem;
+}
+
+.weather-tooltip {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 0.75rem;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.weather-tooltip .time {
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0 0 0.5rem 0;
+  font-size: 0.875rem;
+}
+
+.weather-tooltip p {
+  margin: 0.25rem 0;
+  font-size: 0.8125rem;
+  color: #475569;
+}
+
+.weather-tooltip .temp {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.weather-tooltip .snow {
+  color: #3b82f6;
+  font-weight: 600;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .weather-stats {
+    gap: 1rem;
+  }
+
+  .stat {
+    min-width: calc(50% - 0.5rem);
+  }
+
+  .weather-chart-container {
+    padding: 1rem;
+  }
+}

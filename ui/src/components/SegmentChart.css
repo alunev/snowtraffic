@@ -1,0 +1,146 @@
+.segment-chart {
+  width: 100%;
+}
+
+.segment-legend {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background: #f8fafc;
+  border-radius: 8px;
+}
+
+.legend-title {
+  text-align: center;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+  color: #64748b;
+}
+
+.legend-mode {
+  font-weight: 600;
+  color: #475569;
+}
+
+.legend-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: white;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 2px solid transparent;
+  user-select: none;
+}
+
+.legend-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.legend-item.active {
+  border-color: #3b82f6;
+  background: #eff6ff;
+  font-weight: 600;
+}
+
+.legend-item.dimmed {
+  opacity: 0.4;
+}
+
+.legend-color {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+}
+
+.legend-label {
+  font-size: 0.875rem;
+  color: #1e293b;
+}
+
+.custom-tooltip {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1rem;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.custom-tooltip .label {
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 0.5rem;
+}
+
+.custom-tooltip .total-time {
+  color: #1e293b;
+  margin: 0.5rem 0;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.custom-tooltip p {
+  margin: 0.25rem 0;
+  font-size: 0.875rem;
+}
+
+.chart-empty {
+  text-align: center;
+  padding: 4rem 2rem;
+  color: #64748b;
+}
+
+.chart-empty p {
+  margin: 0.5rem 0;
+}
+
+.chart-stats {
+  display: flex;
+  justify-content: space-around;
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid #e2e8f0;
+}
+
+.stat {
+  text-align: center;
+}
+
+.stat-label {
+  display: block;
+  font-size: 0.875rem;
+  color: #64748b;
+  margin-bottom: 0.25rem;
+}
+
+.stat-value {
+  display: block;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+@media (max-width: 768px) {
+  .legend-items {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .legend-item {
+    justify-content: flex-start;
+  }
+
+  .chart-stats {
+    flex-direction: column;
+    gap: 1rem;
+  }
+}
