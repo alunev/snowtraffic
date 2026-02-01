@@ -12,7 +12,7 @@ SNOTEL API → poll_weather.py → traffic.db → FastAPI → React UI
 
 ### Polling Schedule
 ```
-*/15 * * * *  Traffic data (Google Maps Routes API)
+*/30 * * * *  Traffic data (Google Maps Routes API) - Stevens Pass only
 0 * * * *     Weather data (SNOTEL AWDB API)
 0 2 * * *     Database backup
 ```

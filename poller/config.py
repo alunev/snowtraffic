@@ -15,10 +15,8 @@ DB_PATH = DB_DIR / "traffic.db"
 
 # Polling Configuration
 # Only active (non-archived) routes are polled
-# 15 minutes = ~17,280 requests/month with 6 routes = $86/month (within $200 free tier)
-# 10 minutes = ~25,920 requests/month with 6 routes = $130/month (within $200 free tier)
-# 5 minutes = ~51,840 requests/month with 6 routes = $259/month ($59 after credit)
-POLL_INTERVAL_MINUTES = 15
+# 30 minutes with 2 routes (Stevens only) = ~2,880 requests/month = $0 (under 5k free tier)
+POLL_INTERVAL_MINUTES = 30
 
 # Google Maps Routes Configuration
 # Define origin-destination pairs to track
@@ -108,6 +106,10 @@ ARCHIVED_ROUTES = [
     "duvall-stevens-eb",
     "stevens-duvall-wb",
     "duvall-snoqualmie-eb",
+    "redmond-snoqualmie-eb",
+    "snoqualmie-redmond-wb",
+    "redmond-mtbaker-eb",
+    "mtbaker-redmond-wb",
 ]
 
 # Weather Station Configuration
