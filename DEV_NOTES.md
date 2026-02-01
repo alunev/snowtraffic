@@ -40,9 +40,9 @@ SNOTEL API → poll_weather.py → traffic.db → FastAPI → React UI
 - **Format**: `Base: 26.4°F • 0.0" snow / 0.00" rain (since 4pm)`
 
 ### Route Configuration
-- **Stevens Pass**: Segments enabled (Monroe, Sultan, Skykomish)
-- **Snoqualmie**: No segments (direct route)
-- **Mt Baker**: Segments enabled (Everett, Burlington, Glacier)
+- **Stevens Pass**: Active, segments enabled (Monroe, Sultan, Skykomish)
+- **Snoqualmie**: Archived (data preserved)
+- **Mt Baker**: Archived (data preserved)
 
 ### Backup Strategy
 - **Retention**: 90 days with compacting
