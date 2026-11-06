@@ -1,5 +1,5 @@
 """FastAPI backend for serving travel time data."""
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 import sqlite3
 import sys
@@ -8,12 +8,17 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 from pydantic import BaseModel
 
-# Add poller to path to import config
+# Add poller to path to import the route lists. Import routes, never config:
+# config loads .env, and the API process must not hold the Google Maps key.
 sys.path.insert(0, str(Path(__file__).parent.parent / "poller"))
-from config import ARCHIVED_ROUTES
+from routes import ARCHIVED_ROUTES
 
 # Database path
 DB_PATH = Path(__file__).parent.parent / "data" / "traffic.db"
+
+# Query caps: 90 days (3x the UI's largest view) and 5000 rows per request
+MAX_HOURS = 2160
+MAX_LIMIT = 5000
 
 app = FastAPI(title="Snow Traffic API", version="1.0.0")
 
@@ -81,7 +86,8 @@ def get_db_connection():
             status_code=500,
             detail="Database not found. Run poller/init_db.py first."
         )
-    return sqlite3.connect(DB_PATH)
+    # Read-only: the API never writes; the pollers own the database
+    return sqlite3.connect(f"{DB_PATH.resolve().as_uri()}?mode=ro", uri=True)
 
 
 def row_to_dict(cursor, row):
@@ -250,8 +256,8 @@ def get_current_status_by_route(route_id: str):
 @app.get("/history/{route_id}", response_model=List[TravelTimeRecord])
 def get_history(
     route_id: str,
-    hours: int = 24,
-    limit: int = 1000
+    hours: int = Query(24, ge=1, le=MAX_HOURS),
+    limit: int = Query(1000, ge=1, le=MAX_LIMIT)
 ):
     """
     Get historical data for a route.
@@ -301,8 +307,8 @@ def get_history(
 @app.get("/segments/{route_id}")
 def get_segments(
     route_id: str,
-    hours: int = 24,
-    limit: int = 1000
+    hours: int = Query(24, ge=1, le=MAX_HOURS),
+    limit: int = Query(1000, ge=1, le=MAX_LIMIT)
 ):
     """
     Get segment-by-segment historical data for a route.
@@ -461,13 +467,18 @@ def get_current_weather():
 
 
 @app.get("/weather/history")
-def get_weather_history(station_id: str = "snotel-791", hours: int = 24):
+def get_weather_history(
+    station_id: str = "snotel-791",
+    hours: int = Query(24, ge=1, le=MAX_HOURS),
+    limit: int = Query(MAX_LIMIT, ge=1, le=MAX_LIMIT)
+):
     """
     Get hourly weather history for charting with on-the-fly accumulation calculation.
 
     Args:
         station_id: Station ID to query (default: snotel-791)
         hours: Number of hours to look back (default: 24)
+        limit: Maximum number of hourly records to return (default: 5000)
 
     Returns:
         List of hourly weather records with calculated accumulations since 4pm
@@ -491,7 +502,8 @@ def get_weather_history(station_id: str = "snotel-791", hours: int = 24):
         AND recorded_at >= datetime('now', '-' || ? || ' hours')
         GROUP BY station_id, measured_at
         ORDER BY measured_at ASC
-    """, (station_id, hours))
+        LIMIT ?
+    """, (station_id, hours, limit))
 
     raw_data = cursor.fetchall()
 
