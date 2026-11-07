@@ -1,20 +1,34 @@
 """FastAPI backend for serving travel time data."""
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+import json
+import shutil
 import sqlite3
 import sys
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from pydantic import BaseModel
 
 # Add poller to path to import the route lists. Import routes, never config:
 # config loads .env, and the API process must not hold the Google Maps key.
 sys.path.insert(0, str(Path(__file__).parent.parent / "poller"))
-from routes import ARCHIVED_ROUTES
+from routes import ROUTES, ARCHIVED_ROUTES
 
 # Database path
 DB_PATH = Path(__file__).parent.parent / "data" / "traffic.db"
+
+# /health inputs. The stamps are written by /opt/backup-snowtraffic.sh (0644, readable by the API user).
+BACKUPS_DIR = DB_PATH.parent / "backups"
+DISK_PATH = "/"
+
+# /health thresholds
+TRAFFIC_MAX_AGE_MIN = 90   # two missed polls at */30
+WEATHER_MAX_AGE_MIN = 60   # SNOTEL misses write no row, so 45 would fail on two hiccups
+DISK_MAX_PCT = 80
+BACKUP_MAX_AGE_H = 26      # nightly at 02:10 UTC
+OFFBOX_MAX_AGE_H = 36      # the off-box stamp is only rewritten after a verified upload
 
 # Query caps: 90 days (3x the UI's largest view) and 5000 rows per request
 MAX_HOURS = 2160
@@ -107,8 +121,105 @@ def read_root():
             "/current/{route_id}": "Get current status for specific route",
             "/history/{route_id}": "Get historical data for a route",
             "/segments/{route_id}": "Get segment-by-segment historical data for a route",
+            "/health": "200 when pollers, disk and backups are fresh, else 503",
         }
     }
+
+
+def _age_min(newest: Optional[str]) -> Optional[int]:
+    """Minutes since a poller timestamp (naive datetime.now(), as the pollers write)."""
+    if newest is None:
+        return None
+    return int((datetime.now() - datetime.fromisoformat(newest)).total_seconds() // 60)
+
+
+def _read_stamp(name: str) -> dict:
+    """A backup stamp as a dict with an aware `at`; raises ValueError on a bad stamp."""
+    path = BACKUPS_DIR / name
+    try:
+        stamp = json.loads(path.read_text())
+        at = datetime.fromisoformat(stamp["at"])
+    except FileNotFoundError:
+        raise ValueError(f"{name} missing")
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        raise ValueError(f"{name} unreadable: {type(e).__name__}")
+    if at.tzinfo is None:
+        raise ValueError(f"{name} unreadable: at has no timezone")
+    stamp["at"] = at
+    return stamp
+
+
+def _age_h(at: datetime) -> float:
+    return round((datetime.now(timezone.utc) - at).total_seconds() / 3600, 1)
+
+
+@app.get("/health")
+def get_health():
+    """Freshness of every moving part. 200 with "status":"ok" when all rows pass,
+    else 503 with "status":"fail" and the failing rows named in `failing`."""
+    failing = []
+    body = {}
+
+    active_routes = [r["id"] for r in ROUTES if r["id"] not in ARCHIVED_ROUTES]
+    try:
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            traffic = {}
+            for route_id in active_routes:
+                cursor.execute(
+                    "SELECT MAX(recorded_at) FROM travel_times WHERE route_id = ?", (route_id,))
+                age = _age_min(cursor.fetchone()[0])
+                traffic[route_id] = age
+                if age is None or age > TRAFFIC_MAX_AGE_MIN:
+                    failing.append(f"traffic:{route_id}")
+            body["traffic_age_min"] = traffic
+
+            cursor.execute("SELECT MAX(recorded_at) FROM weather_data")
+            weather_age = _age_min(cursor.fetchone()[0])
+            body["weather_age_min"] = weather_age
+            if weather_age is None or weather_age > WEATHER_MAX_AGE_MIN:
+                failing.append("weather")
+        finally:
+            conn.close()
+    except (sqlite3.Error, HTTPException, ValueError) as e:
+        # e.g. a hot journal left by a crashed poller makes a read-only open fail
+        body["db_error"] = str(getattr(e, "detail", e))
+        failing.append("db")
+
+    usage = shutil.disk_usage(DISK_PATH)
+    disk_pct = round(100 * usage.used / (usage.used + usage.free), 1)  # df's Use%
+    body["disk_pct"] = disk_pct
+    if disk_pct > DISK_MAX_PCT:
+        failing.append("disk")
+
+    try:
+        snapshot = _read_stamp("stamp-snapshot.json")
+        body["backup_age_h"] = _age_h(snapshot["at"])
+        body["backup_check"] = snapshot.get("integrity_check")
+        if body["backup_age_h"] > BACKUP_MAX_AGE_H:
+            failing.append("backup_age")
+        if body["backup_check"] != "ok":
+            failing.append("backup_check")
+    except ValueError as e:
+        body["backup_age_h"] = None
+        body["backup_check"] = str(e)
+        failing.append("backup_stamp")
+
+    try:
+        body["offbox_age_h"] = _age_h(_read_stamp("stamp-offbox.json")["at"])
+        if body["offbox_age_h"] > OFFBOX_MAX_AGE_H:
+            failing.append("offbox_age")
+    except ValueError as e:
+        body["offbox_age_h"] = None
+        body["offbox_error"] = str(e)
+        failing.append("offbox_stamp")
+
+    status = "fail" if failing else "ok"
+    return JSONResponse(
+        status_code=503 if failing else 200,
+        content={"status": status, "failing": failing, **body},
+    )
 
 
 @app.get("/routes", response_model=List[RouteInfo])
