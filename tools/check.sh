@@ -18,7 +18,7 @@ if [ "$(cat venv/.requirements.sha256 2>/dev/null)" != "$want" ]; then
         rm -rf venv
         if ! "$py" -m venv venv >/dev/null 2>&1; then
             rm -rf venv
-            echo "check.sh: $py cannot create a venv (no ensurepip?); install python3.12" >&2
+            echo "check.sh: $py cannot create a venv (no ensurepip?); install python3.12-venv" >&2
             exit 1
         fi
     fi
