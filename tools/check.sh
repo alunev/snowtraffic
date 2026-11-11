@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Repo gate: run the API test suite. Exits non-zero if any test fails.
-# Bootstraps api/venv (gitignored) from api/requirements.txt.
+# Bootstraps api/venv (gitignored) from api/requirements-test.txt: the API's and the
+# pollers' production locks plus the test runners, every line hash-pinned.
 # The real Google Maps test skips unless GOOGLE_MAPS_API_KEY is set.
 set -euo pipefail
 
 cd "$(dirname "$0")/../api"
 
-# Reinstall when requirements.txt changes or a previous install did not finish.
-want=$(sha256sum requirements.txt | cut -d' ' -f1)
+# Reinstall when requirements-test.txt changes or a previous install did not finish.
+want=$(sha256sum requirements-test.txt | cut -d' ' -f1)
 if [ "$(cat venv/.requirements.sha256 2>/dev/null)" != "$want" ]; then
     # Build the venv with python3.12, what the VPS runs; python3 is the fallback.
     # A venv without pip is a failed earlier build (e.g. python3 3.14 with no
@@ -22,7 +23,7 @@ if [ "$(cat venv/.requirements.sha256 2>/dev/null)" != "$want" ]; then
             exit 1
         fi
     fi
-    venv/bin/pip install -q -r requirements.txt
+    venv/bin/pip install -q --require-hashes -r requirements-test.txt
     echo "$want" > venv/.requirements.sha256
 fi
 

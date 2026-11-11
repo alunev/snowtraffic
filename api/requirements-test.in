@@ -1,0 +1,11 @@
+# Test set: the API's production lock, the pollers' production lock (the tests import
+# poll_weather and config) and the test runners. tools/check.sh and CI install the compiled
+# requirements-test.txt with --require-hashes. Regenerate it after either production lock
+# (command in requirements.in).
+-r requirements.in
+-c requirements.txt
+-c ../poller/requirements.txt
+requests
+python-dotenv
+pytest==9.2.0
+httpx==0.28.1

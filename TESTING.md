@@ -24,7 +24,7 @@ api/
 ```bash
 cd api
 source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+pip install --require-hashes -r requirements-test.txt  # test set: production locks + pytest
 pytest
 ```
 
@@ -156,7 +156,7 @@ To run tests in CI/CD pipelines:
     cd api
     python -m venv venv
     source venv/bin/activate
-    pip install -r requirements.txt
+    pip install --require-hashes -r requirements-test.txt
     pytest -v
 ```
 
@@ -270,7 +270,7 @@ If you get database lock errors, ensure no other processes are using the test da
 ### Missing Dependencies
 
 ```bash
-pip install -r requirements.txt
+pip install --require-hashes -r requirements-test.txt  # test set: production locks + pytest
 ```
 
 Make sure all test dependencies (pytest, httpx, etc.) are installed.

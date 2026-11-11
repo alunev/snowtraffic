@@ -1,0 +1,8 @@
+# Production dependencies of the pollers and of /opt/backup-snowtraffic.sh (the nightly DB push to
+# Wasabi runs on this venv, hence boto3). Edit this file, then regenerate the hashed lock from the
+# repo root, and api/requirements-test.txt after it (see api/requirements.in):
+#   uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-unknown-linux-gnu poller/requirements.in -o poller/requirements.txt
+# The VPS installs requirements.txt with --require-hashes --only-binary :all:.
+requests==2.34.2
+python-dotenv==1.2.4
+boto3==1.43.126

@@ -37,7 +37,7 @@ def run_check(tmp_path, interpreters, half_venv=False):
     (root / "tools").mkdir(parents=True)
     (root / "api").mkdir()
     shutil.copy(CHECK_SH, root / "tools" / "check.sh")
-    (root / "api" / "requirements.txt").write_text("fastapi\n")
+    (root / "api" / "requirements-test.txt").write_text("fastapi==1.0 --hash=sha256:00\n")
     if half_venv:
         (root / "api" / "venv" / "bin").mkdir(parents=True)
         (root / "api" / "venv" / "bin" / "python").write_text("")
@@ -66,7 +66,7 @@ def test_venv_is_built_with_python312_not_python3(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert calls == [
         "python3.12 -m venv venv",
-        "pip install -q -r requirements.txt",
+        "pip install -q --require-hashes -r requirements-test.txt",
         "venv-python -m pytest -q",
     ]
 
