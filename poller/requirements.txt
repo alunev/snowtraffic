@@ -1,5 +1,5 @@
-requests==2.31.0
-python-dotenv==1.0.0
+requests==2.34.2
+python-dotenv==1.2.4
 googlemaps==4.10.0
 # boto3: /opt/backup-snowtraffic.sh (the nightly DB push to Wasabi) runs on this venv
-boto3==1.43.125
+boto3==1.43.126
