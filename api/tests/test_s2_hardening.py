@@ -139,3 +139,17 @@ def test_null_measured_at_row_is_ignored(db, client, path):
     r = client.get(path)
     assert r.status_code == 200, r.text
     assert r.content == clean.content
+
+
+def test_station_with_only_a_null_measured_at_row_is_404(db, client):
+    """The case where the filter shows on /weather/{station_id}: the old code picked the
+    NULL row and crashed in datetime.fromisoformat(None) (500); now there is no row."""
+    with sqlite3.connect(db) as conn:
+        conn.execute("INSERT INTO weather_data (station_id, station_name, station_type,"
+                     " snow_depth_inches, measured_at, recorded_at)"
+                     " VALUES ('broken-1', 'x', 'base', 1.0, NULL, ?)",
+                     (datetime.now().isoformat(),))
+    r = client.get("/weather/broken-1")
+    assert r.status_code == 404, r.text
+    r = client.get("/weather/history?station_id=broken-1&hours=720")
+    assert (r.status_code, r.json()) == (200, [])
