@@ -63,3 +63,14 @@ def test_write_methods_refused_for_domain(prod_client):
         headers={"Origin": "https://firstchair.live", "Access-Control-Request-Method": "POST"},
     )
     assert r.status_code == 400
+
+
+@pytest.mark.parametrize("origin", [
+    "https://firstchair.live", "https://www.firstchair.live",
+    "https://evil.example", "http://localhost:5173", "null",
+])
+def test_no_credentials_header_for_any_origin(prod_client, origin):
+    """No cookies or auth exist to share, so CORS never says credentials are allowed
+    (roast finding A5). The allowed origins above still get Allow-Origin."""
+    for r in (prod_client.get("/", headers={"Origin": origin}), preflight(prod_client, origin)):
+        assert "access-control-allow-credentials" not in r.headers

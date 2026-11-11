@@ -1,6 +1,9 @@
-"""GET /health: one row per moving part. Every stale case below is a positive
+"""GET /internal/health: one row per moving part. Every stale case below is a positive
 control: it makes one defect present on top of the all-fresh fixture and must
-turn the endpoint red, while the all-fresh fixture must stay green."""
+turn the endpoint red, while the all-fresh fixture must stay green.
+
+GET /health is the public twin: the same verdict with no detail, exactly
+{"status":"ok"} (200) or {"status":"fail"} (503) (comb-0xqi.20)."""
 import json
 import sqlite3
 from collections import namedtuple
@@ -89,7 +92,9 @@ class Box:
         return self
 
     def get(self):
-        r = self.client.get("/health")
+        """The detail, with the public answer for the same state riding along as r.public."""
+        r = self.client.get("/internal/health")
+        r.public = self.client.get("/health")
         return r, r.json()
 
 
@@ -103,6 +108,8 @@ def assert_red(r, body, *rows):
     assert body["status"] == "fail"
     assert body["failing"] == list(rows)
     assert OK_MARKER not in r.text
+    # the public twin agrees, and says nothing more
+    assert (r.public.status_code, r.public.content) == (503, b'{"status":"fail"}')
 
 
 def test_active_routes_come_from_the_route_list():
@@ -123,6 +130,28 @@ def test_all_fresh_is_green(box):
     assert body["backup_age_h"] == pytest.approx(2, abs=0.1)
     assert body["backup_check"] == "ok"
     assert body["offbox_age_h"] == pytest.approx(2, abs=0.1)
+
+
+def test_public_health_is_terse_when_green(box):
+    r, _ = box.all_fresh().get()
+    assert (r.public.status_code, r.public.content) == (200, b'{"status":"ok"}')
+    assert OK_MARKER.encode() in r.public.content
+    assert r.public.headers["content-type"] == "application/json"
+
+
+def test_public_health_is_terse_when_red(box):
+    """Forced stale: weather 2 h old and the DB error text present in the detail,
+    while the public body stays exactly the verdict."""
+    box.all_fresh()
+    with sqlite3.connect(box.db) as conn:
+        conn.execute("DELETE FROM weather_data")
+    box.weather(naive_ago(hours=2))
+    r, body = box.get()
+    assert_red(r, body, "weather")
+    box.db.unlink()
+    r, body = box.get()
+    assert "Database not found" in body["db_error"]
+    assert (r.public.status_code, r.public.content) == (503, b'{"status":"fail"}')
 
 
 def test_stale_traffic_is_per_route(box):

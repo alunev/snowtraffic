@@ -125,14 +125,14 @@ CAPPED = [
 
 @pytest.mark.parametrize("path", CAPPED)
 @pytest.mark.parametrize("query", ["limit=100000", "limit=5001", "limit=0",
-                                   "hours=100000", "hours=2161", "hours=0"])
+                                   "hours=100000", "hours=721", "hours=0"])
 def test_over_cap_query_refused(full_client, path, query):
     r = full_client.get(f"{path}?{query}")
     assert r.status_code == 422, r.text
 
 
 @pytest.mark.parametrize("path", CAPPED)
-@pytest.mark.parametrize("query", ["", "limit=5000", "hours=2160", "hours=720&limit=1"])
+@pytest.mark.parametrize("query", ["", "limit=5000", "hours=720", "hours=720&limit=1"])
 def test_at_cap_query_answered(full_client, path, query):
     r = full_client.get(f"{path}?{query}")
     assert r.status_code == 200, r.text
