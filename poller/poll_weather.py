@@ -1,4 +1,5 @@
 """Poll SNOTEL weather station data and store in SQLite."""
+import math
 import requests
 import sqlite3
 from datetime import datetime, timedelta
@@ -81,11 +82,42 @@ def fetch_snotel_data(station):
         return None
 
 
+VALUE_FIELDS = ("temperature_f", "snow_depth_inches", "total_precip_inches")
+
+
+def reading_problem(weather_data):
+    """Why a reading must not be saved, or None. The API parses measured_at with
+    datetime.fromisoformat and does arithmetic on the values, so one bad row used to
+    make /weather/* return 500 until the DB was edited. A single missing value is
+    fine (live rows lack temperature and precip); text, bools, NaN/inf are not."""
+    measured_at = weather_data.get("measured_at")
+    if not isinstance(measured_at, str):
+        return f"measured_at is {measured_at!r}"
+    try:
+        datetime.fromisoformat(measured_at)
+    except ValueError:
+        return f"measured_at {measured_at!r} does not parse"
+    values = [weather_data.get(f) for f in VALUE_FIELDS]
+    for field, value in zip(VALUE_FIELDS, values):
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            return f"{field} is {value!r}, not a number"
+    if all(v is None for v in values):
+        return "no values"
+    return None
+
+
 def save_to_database(weather_data):
     """Save raw weather data to SQLite database."""
     if not weather_data:
         print("No weather data to save")
         return
+
+    problem = reading_problem(weather_data)
+    if problem:
+        print(f"WARNING: skipped a malformed reading for {weather_data.get('station_id')}: {problem}")
+        return False
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -112,6 +144,7 @@ def save_to_database(weather_data):
     conn.close()
 
     print(f"✓ Saved weather data for {weather_data['station_name']}")
+    return True
 
 
 def main():
@@ -136,8 +169,8 @@ def main():
         print(f"  Measured at: {weather_data['measured_at']}")
 
         # Save raw data to database (accumulation calculated by API on-demand)
-        save_to_database(weather_data)
-        records_saved += 1
+        if save_to_database(weather_data):
+            records_saved += 1
 
     print(f"\n✓ Saved {records_saved} weather station records")
     print(f"[{datetime.now().isoformat()}] Weather poll complete\n")

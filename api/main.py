@@ -1,4 +1,6 @@
 """FastAPI backend for serving travel time data."""
+from bisect import bisect_left, bisect_right
+import calendar
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -30,11 +32,16 @@ DISK_MAX_PCT = 80
 BACKUP_MAX_AGE_H = 26      # nightly at 02:10 UTC
 OFFBOX_MAX_AGE_H = 36      # the off-box stamp is only rewritten after a verified upload
 
-# Query caps: 90 days (3x the UI's largest view) and 5000 rows per request
-MAX_HOURS = 2160
+# Query caps: 30 days (the UI's largest view) and 5000 rows per request
+MAX_HOURS = 720
 MAX_LIMIT = 5000
 
-app = FastAPI(title="Snow Traffic API", version="1.0.0")
+# Per-route endpoints answer only for these; archived and unknown ids are a 404
+ACTIVE_ROUTE_IDS = {r["id"] for r in ROUTES if r["id"] not in ARCHIVED_ROUTES}
+
+# No docs or schema in production, and no redirect built from the Host header
+app = FastAPI(title="Snow Traffic API", version="1.0.0", docs_url=None, redoc_url=None,
+              openapi_url=None, redirect_slashes=False)
 
 # CORS Configuration
 # For production, set CORS_ORIGINS environment variable to comma-separated list of allowed origins
@@ -45,7 +52,7 @@ cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=True,
+    allow_credentials=False,  # no cookies or auth to share
     allow_methods=["GET"],  # Read-only API
     allow_headers=["*"],
 )
@@ -104,6 +111,12 @@ def get_db_connection():
     return sqlite3.connect(f"{DB_PATH.resolve().as_uri()}?mode=ro", uri=True)
 
 
+def require_active_route(route_id: str):
+    """404 for an archived or unknown route id, before any query runs."""
+    if route_id not in ACTIVE_ROUTE_IDS:
+        raise HTTPException(status_code=404, detail="Route not found")
+
+
 def row_to_dict(cursor, row):
     """Convert SQLite row to dictionary."""
     return {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
@@ -153,10 +166,8 @@ def _age_h(at: datetime) -> float:
     return round((datetime.now(timezone.utc) - at).total_seconds() / 3600, 1)
 
 
-@app.get("/health")
-def get_health():
-    """Freshness of every moving part. 200 with "status":"ok" when all rows pass,
-    else 503 with "status":"fail" and the failing rows named in `failing`."""
+def check_health():
+    """Freshness of every moving part: (failing rows, detail body)."""
     failing = []
     body = {}
 
@@ -215,10 +226,26 @@ def get_health():
         body["offbox_error"] = str(e)
         failing.append("offbox_stamp")
 
-    status = "fail" if failing else "ok"
+    return failing, body
+
+
+@app.get("/health")
+def get_health():
+    """Public: exactly {"status":"ok"} (200) or {"status":"fail"} (503), no detail.
+    His GCP uptime check matches the bytes "status":"ok"."""
+    failing, _ = check_health()
+    return JSONResponse(status_code=503 if failing else 200,
+                        content={"status": "fail" if failing else "ok"})
+
+
+@app.get("/internal/health")
+def get_internal_health():
+    """The same check with the detail: failing rows, ages, disk, db_error.
+    Meant for 127.0.0.1 only; nginx refuses /api/internal/ (S3)."""
+    failing, body = check_health()
     return JSONResponse(
         status_code=503 if failing else 200,
-        content={"status": status, "failing": failing, **body},
+        content={"status": "fail" if failing else "ok", "failing": failing, **body},
     )
 
 
@@ -317,6 +344,7 @@ def get_current_status():
 @app.get("/current/{route_id}", response_model=CurrentStatus)
 def get_current_status_by_route(route_id: str):
     """Get current status for a specific route."""
+    require_active_route(route_id)
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -378,6 +406,7 @@ def get_history(
         hours: Number of hours to look back (default: 24)
         limit: Maximum number of records to return (default: 1000)
     """
+    require_active_route(route_id)
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -432,44 +461,39 @@ def get_segments(
     Returns:
         List of records grouped by timestamp, each containing segments
     """
+    require_active_route(route_id)
     conn = get_db_connection()
     cursor = conn.cursor()
 
     # Calculate cutoff time
     cutoff = datetime.now() - timedelta(hours=hours)
 
-    # Get distinct timestamps for this route
+    # One query: every segment row at or after the oldest of the `limit` newest
+    # timestamps (each such row belongs to one of them), grouped below.
+    # Ties on segment_order keep insertion order, as the old per-timestamp loop did.
     cursor.execute("""
-        SELECT DISTINCT recorded_at
+        SELECT recorded_at, segment_from, segment_to, duration_min
         FROM route_segments
-        WHERE route_id = ? AND recorded_at >= ?
-        ORDER BY recorded_at DESC
-        LIMIT ?
-    """, (route_id, cutoff.isoformat(), limit))
+        WHERE route_id = ? AND recorded_at >= (
+            SELECT MIN(recorded_at) FROM (
+                SELECT DISTINCT recorded_at
+                FROM route_segments
+                WHERE route_id = ? AND recorded_at >= ?
+                ORDER BY recorded_at DESC
+                LIMIT ?
+            )
+        )
+        ORDER BY recorded_at DESC, segment_order, id
+    """, (route_id, route_id, cutoff.isoformat(), limit))
 
-    timestamps = [row[0] for row in cursor.fetchall()]
-
-    # For each timestamp, get all segments
     result = []
-    for timestamp in timestamps:
-        cursor.execute("""
-            SELECT segment_from, segment_to, duration_min, segment_order
-            FROM route_segments
-            WHERE route_id = ? AND recorded_at = ?
-            ORDER BY segment_order
-        """, (route_id, timestamp))
-
-        segments = []
-        for row in cursor.fetchall():
-            segments.append({
-                "from": row[0],
-                "to": row[1],
-                "duration_min": row[2]
-            })
-
-        result.append({
-            "recorded_at": timestamp,
-            "segments": segments
+    for recorded_at, segment_from, segment_to, duration_min in cursor.fetchall():
+        if not result or result[-1]["recorded_at"] != recorded_at:
+            result.append({"recorded_at": recorded_at, "segments": []})
+        result[-1]["segments"].append({
+            "from": segment_from,
+            "to": segment_to,
+            "duration_min": duration_min
         })
 
     conn.close()
@@ -500,7 +524,8 @@ def get_current_weather():
             measured_at,
             MAX(recorded_at) as recorded_at
         FROM weather_data
-        WHERE (station_id, measured_at) IN (
+        WHERE measured_at IS NOT NULL
+        AND (station_id, measured_at) IN (
             SELECT station_id, MAX(measured_at)
             FROM weather_data
             GROUP BY station_id
@@ -610,6 +635,7 @@ def get_weather_history(
             MAX(recorded_at) as recorded_at
         FROM weather_data
         WHERE station_id = ?
+        AND measured_at IS NOT NULL
         AND recorded_at >= datetime('now', '-' || ? || ' hours')
         GROUP BY station_id, measured_at
         ORDER BY measured_at ASC
@@ -618,12 +644,10 @@ def get_weather_history(
 
     raw_data = cursor.fetchall()
 
-    history = []
+    # Each row's 4pm baseline window, then ONE query for every candidate row in them
+    windows = []
     for row in raw_data:
-        station_id_val = row[0]
         measured_at_str = row[6]
-        snow_depth = row[4]
-        total_precip = row[5]
 
         # Parse measured_at to determine 4pm baseline time
         measured_at = datetime.fromisoformat(measured_at_str)
@@ -637,21 +661,40 @@ def get_weather_history(
             # After 4pm: use 4pm today as baseline
             baseline_time = measured_at.replace(hour=16, minute=0, second=0, microsecond=0)
 
-        # Query for baseline measurement at 4pm (±1 hour window)
+        # Baseline measurement at 4pm (±1 hour window)
         baseline_start = (baseline_time - timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S')
         baseline_end = (baseline_time + timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S')
+        windows.append((baseline_start, baseline_end, calendar.timegm(baseline_time.timetuple())))
 
+    # Raw rows (duplicates kept, no recorded_at filter), in the index order (measured_at, id)
+    # the old per-row lookup scanned. SQLite computes the epoch, as it did for the old ORDER BY.
+    candidates = []
+    if windows:
         cursor.execute("""
-            SELECT snow_depth_inches, total_precip_inches
+            SELECT measured_at, strftime('%s', measured_at), snow_depth_inches, total_precip_inches
             FROM weather_data
             WHERE station_id = ?
             AND measured_at >= ?
             AND measured_at <= ?
-            ORDER BY ABS(strftime('%s', measured_at) - strftime('%s', ?))
-            LIMIT 1
-        """, (station_id_val, baseline_start, baseline_end, baseline_time.strftime('%Y-%m-%d %H:%M:%S')))
+            ORDER BY measured_at, id
+        """, (station_id, min(w[0] for w in windows), max(w[1] for w in windows)))
+        candidates = cursor.fetchall()
+    candidate_keys = [c[0] for c in candidates]
 
-        baseline = cursor.fetchone()
+    history = []
+    for row, (baseline_start, baseline_end, baseline_epoch) in zip(raw_data, windows):
+        snow_depth = row[4]
+        total_precip = row[5]
+
+        # The old lookup: the window compared as text, nearest by epoch, ties to the first
+        # row, an unparseable measured_at (NULL distance) sorting first
+        baseline = None
+        best = None
+        for c in candidates[bisect_left(candidate_keys, baseline_start):
+                            bisect_right(candidate_keys, baseline_end)]:
+            distance = -1 if c[1] is None else abs(int(c[1]) - baseline_epoch)
+            if best is None or distance < best:
+                best, baseline = distance, (c[2], c[3])
 
         # Calculate accumulations
         snow_accum = None
@@ -725,6 +768,7 @@ def get_station_weather(station_id: str):
             MAX(recorded_at) as recorded_at
         FROM weather_data
         WHERE station_id = ?
+        AND measured_at IS NOT NULL
         GROUP BY station_id, measured_at
         ORDER BY measured_at DESC
         LIMIT 1

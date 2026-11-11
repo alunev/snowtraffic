@@ -9,7 +9,8 @@ Shapes copied from the live DB (2026-11-11, read-only): segment rows every 30 mi
 an hour, a few date-only rows, rows with NULL temperature and precip, duplicate
 measured_at rows whose values differ. Added on purpose: hours with no row, days whose
 16:00 row is missing (15:00 and 17:00 tie), days with no baseline row at all, segments
-inserted out of segment_order, a second active route and an archived one interleaved.
+inserted out of segment_order, a second active route and an archived one interleaved,
+and some measured_at with seconds, which land exactly on the baseline window bounds.
 """
 import random
 import sqlite3
@@ -90,7 +91,11 @@ def build(path, now: datetime, seed: int = 1, days: int = 31):
         depth = max(0.0, depth + rng.choice([0, 0, 0, 0.5, 1.0, 2.0, -0.5]))
         precip += rng.choice([0, 0, 0.1, 0.2])
         measured = m.strftime("%Y-%m-%d %H:%M")
-        if rng.random() < 0.01:
+        if rng.random() < 0.15:
+            # with seconds: '... 17:00:00' sits exactly on a baseline window's end
+            # (included) and '... 15:00:00' on its start, where '... 15:00' falls outside
+            measured = m.strftime("%Y-%m-%d %H:%M:%S")
+        elif rng.random() < 0.01:
             measured = m.strftime("%Y-%m-%d")  # date-only, as 3 live rows are
         temp = None if rng.random() < 0.01 else round(rng.uniform(10, 40), 1)
         pr = None if temp is None else round(precip, 1)
