@@ -448,7 +448,7 @@ def get_history(
 def get_segments(
     route_id: str,
     hours: int = Query(24, ge=1, le=MAX_HOURS),
-    limit: int = Query(1000, ge=1, le=MAX_LIMIT)
+    limit: int = Query(MAX_LIMIT, ge=1, le=MAX_LIMIT)
 ):
     """
     Get segment-by-segment historical data for a route.
@@ -456,7 +456,8 @@ def get_segments(
     Args:
         route_id: Route ID to query
         hours: Number of hours to look back (default: 24)
-        limit: Maximum number of timestamps to return (default: 1000)
+        limit: Maximum number of timestamps to return (default: 5000). The default is the cap,
+            so the UI's 30-day view (1440 polls at */30) is whole; MAX_HOURS bounds the answer.
 
     Returns:
         List of records grouped by timestamp, each containing segments
@@ -622,6 +623,11 @@ def get_weather_history(
     conn = get_db_connection()
     cursor = conn.cursor()
 
+    # The cutoff is built in Python in the pollers' format (datetime.now().isoformat(), with a
+    # 'T'), as /segments does. SQLite's datetime('now') has a space, which sorts before 'T', so
+    # comparing against it let in every row of the cutoff's date: up to 48 h for hours=24.
+    cutoff = datetime.now() - timedelta(hours=hours)
+
     # Get raw weather data for the requested time period, grouped by measured_at to dedupe
     cursor.execute("""
         SELECT
@@ -636,11 +642,11 @@ def get_weather_history(
         FROM weather_data
         WHERE station_id = ?
         AND measured_at IS NOT NULL
-        AND recorded_at >= datetime('now', '-' || ? || ' hours')
+        AND recorded_at >= ?
         GROUP BY station_id, measured_at
         ORDER BY measured_at ASC
         LIMIT ?
-    """, (station_id, hours, limit))
+    """, (station_id, cutoff.isoformat(), limit))
 
     raw_data = cursor.fetchall()
 

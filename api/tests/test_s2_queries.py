@@ -2,11 +2,18 @@
 bounded number of SQL statements (comb-0xqi.20, roast finding B1).
 
 The reference is tests/old_impl.py, a verbatim copy of the pre-S2 endpoints.
-Both apps read the same seeded database, and the response bytes must be equal."""
+Both apps read the same seeded database. Two behaviour changes since (comb-0xqi.27, S5d),
+so the golden comparison asks the old loop for what the new code should now return:
+- /segments defaults to limit=5000 (was 1000), so the old loop is asked with limit=5000.
+- /weather/history's window is honest: hours=24 is the last 24 h of recorded_at, where the
+  old text comparison let in every row of the cutoff's date. The old loop is asked for a
+  wider window and its rows are cut at the honest cutoff, then the limit applied."""
 import hashlib
 import re
-from datetime import datetime
+import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
@@ -73,20 +80,106 @@ WEATHER_QUERIES = [
 ]
 
 
-@pytest.mark.parametrize("url", SEGMENT_QUERIES + WEATHER_QUERIES)
-def test_same_bytes_as_the_old_loop(seeded_db, new, old, url):
-    want = old.get(url)
+@pytest.mark.parametrize("url", SEGMENT_QUERIES)
+def test_segments_same_bytes_as_the_old_loop(seeded_db, new, old, url):
+    """Byte-equal to the old loop, which is asked with limit=5000 where the URL has none."""
+    url_old = url if "limit=" in url else url + ("" if url.endswith("?") else "&") + "limit=5000"
+    want = old.get(url_old)
     got = new.get(url)
     assert want.status_code == 200, want.text
     assert got.status_code == 200, got.text
     assert got.content == want.content
 
 
+def honest_from_old(old, url):
+    """What /weather/history should answer for `url`: the old loop's rows over a window 48 h
+    wider (a superset whatever the box's timezone), cut at the honest cutoff on recorded_at,
+    then the limit. Each row is a measured_at group, and MAX(recorded_at) decides whether the
+    group has a row inside the window, so the cut is exact."""
+    q = {k: v[0] for k, v in parse_qs(urlsplit(url).query).items()}
+    hours, limit = int(q.pop("hours", 24)), int(q.pop("limit", 5000))
+    q.update(hours=str(hours + 48), limit="5000")
+    want = old.get("/weather/history?" + "&".join(f"{k}={v}" for k, v in q.items()))
+    assert want.status_code == 200, want.text
+    rows = want.json()
+    assert len(rows) < 5000  # the wide ask was not itself truncated
+    cutoff = NOW - timedelta(hours=hours)
+    return [r for r in rows if datetime.fromisoformat(r["recorded_at"]) >= cutoff][:limit]
+
+
+@pytest.mark.parametrize("url", WEATHER_QUERIES)
+def test_weather_same_rows_as_the_old_loop_in_the_honest_window(seeded_db, new, old, url):
+    got = new.get(url)
+    assert got.status_code == 200, got.text
+    assert got.json() == honest_from_old(old, url)
+
+
+def test_segments_default_is_the_whole_30_day_window(seeded_db, new):
+    """The UI asks /segments/<route>?hours=720 with no limit (App.jsx): every poll in the 30
+    days must come back. Red on the old default limit=1000 (1440 polls at */30)."""
+    cutoff = (NOW - timedelta(hours=720)).isoformat()
+    conn = sqlite3.connect(seeded_db)
+    polls = [r[0] for r in conn.execute(
+        "SELECT DISTINCT recorded_at FROM route_segments WHERE route_id = ? ORDER BY 1 DESC",
+        ("redmond-stevens-eb",)) if r[0] >= cutoff]
+    conn.close()
+    assert len(polls) > 1000  # the fixture is past the old default
+    got = [r["recorded_at"] for r in new.get("/segments/redmond-stevens-eb?hours=720").json()]
+    assert got == polls
+
+
+def window_errors(client, db_path, hours):
+    """Compare /weather/history?hours=N with the rows whose recorded_at, read as a datetime,
+    is within N hours of NOW. Returns what differs (empty when the window is honest)."""
+    cutoff = NOW - timedelta(hours=hours)
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute("SELECT measured_at, recorded_at FROM weather_data"
+                        " WHERE station_id = 'snotel-791' AND measured_at IS NOT NULL").fetchall()
+    conn.close()
+    want = {m for m, rec in rows if datetime.fromisoformat(rec) >= cutoff}
+    got = client.get(f"/weather/history?hours={hours}").json()
+    errors = [f"{r['measured_at']} recorded {r['recorded_at']} is before the cutoff {cutoff}"
+              for r in got if datetime.fromisoformat(r["recorded_at"]) < cutoff]
+    missing = want - {r["measured_at"] for r in got}
+    if missing:
+        errors.append(f"{len(missing)} groups inside the window are missing")
+    return errors
+
+
+@pytest.fixture
+def leak_row(seeded_db):
+    """A row recorded one second before the 24 h cutoff, on the cutoff's own date: the old
+    'T' vs ' ' text comparison lets it in, an honest window never does."""
+    cutoff = NOW - timedelta(hours=24)
+    rec = cutoff - timedelta(seconds=1)
+    assert rec.date() == cutoff.date()  # else this fixture cannot plant the case
+    conn = sqlite3.connect(seeded_db)
+    conn.execute("INSERT INTO weather_data (station_id, station_name, station_elevation,"
+                 " station_type, temperature_f, snow_depth_inches, total_precip_inches,"
+                 " measured_at, recorded_at) VALUES (?, ?, ?, ?, 30.0, 40.0, 20.0, ?, ?)",
+                 (*seeded.STATION, (rec - timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:07"),
+                  rec.isoformat()))
+    conn.commit()
+    conn.close()
+    return seeded_db
+
+
+@pytest.mark.parametrize("hours", [1, 24, 168, 720])
+def test_weather_history_window_is_honest(leak_row, new, hours):
+    assert window_errors(new, leak_row, hours) == []
+
+
+def test_window_check_sees_the_old_comparison(leak_row, old):
+    """Positive control: the same check on the old loop finds rows from before the cutoff."""
+    errors = window_errors(old, leak_row, 24)
+    assert any("before the cutoff" in e for e in errors), errors
+
+
 def test_fixture_exercises_the_edges(seeded_db, new):
     """The golden comparison is only as good as the data: check the fixture reaches the
     cases where a regrouped query could drift from the old one."""
     segs = new.get("/segments/redmond-stevens-eb?hours=720").json()
-    assert len(segs) == 1000  # the default limit truncates the 30-day view
+    assert len(segs) > 1000  # past the old default limit
     assert any(s["duration_min"] is None for r in segs for s in r["segments"])
     hist = new.get("/weather/history?hours=720").json()
     accum = [r["snow_accum_inches"] for r in hist]
