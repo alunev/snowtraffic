@@ -3,6 +3,6 @@
 #   uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-unknown-linux-gnu api/requirements.in -o api/requirements.txt
 #   uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-unknown-linux-gnu api/requirements-test.in -o api/requirements-test.txt
 # The VPS installs requirements.txt with --require-hashes --only-binary :all:.
-fastapi==0.162.0
+fastapi==0.162.2
 uvicorn[standard]==0.54.0
 pydantic==2.14.3
