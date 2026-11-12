@@ -170,9 +170,28 @@ def test_weather_history_window_is_honest(leak_row, new, hours):
 
 
 def test_window_check_sees_the_old_comparison(leak_row, old):
-    """Positive control: the same check on the old loop finds rows from before the cutoff."""
+    """Positive control: the same check on the old loop finds its window wrong. The old loop
+    compares local recorded_at text with SQLite's UTC datetime('now', '-24 hours'). When that
+    falls on or before the local cutoff's date, the 'T' vs ' ' comparison lets in the planted
+    row from before the cutoff. When UTC is already on a later date (a box behind UTC, in the
+    evening) it drops rows inside the window instead: a row planted one second after the
+    cutoff shows that at any hour."""
+    cutoff = NOW - timedelta(hours=24)
+    inside = cutoff + timedelta(seconds=1)
+    conn = sqlite3.connect(leak_row)
+    conn.execute("INSERT INTO weather_data (station_id, station_name, station_elevation,"
+                 " station_type, temperature_f, snow_depth_inches, total_precip_inches,"
+                 " measured_at, recorded_at) VALUES (?, ?, ?, ?, 30.0, 40.0, 20.0, ?, ?)",
+                 (*seeded.STATION, (inside - timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:09"),
+                  inside.isoformat()))
+    conn.commit()
+    utc_cutoff_date = conn.execute("SELECT date('now', '-24 hours')").fetchone()[0]
+    conn.close()
     errors = window_errors(old, leak_row, 24)
-    assert any("before the cutoff" in e for e in errors), errors
+    if utc_cutoff_date > cutoff.date().isoformat():
+        assert any("inside the window are missing" in e for e in errors), errors
+    else:
+        assert any("before the cutoff" in e for e in errors), errors
 
 
 def test_fixture_exercises_the_edges(seeded_db, new):
