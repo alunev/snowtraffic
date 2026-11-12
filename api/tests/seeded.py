@@ -1,4 +1,5 @@
-"""A seeded 31-day database shaped like the live one, for the S2 golden and budget tests.
+"""A seeded 31-day database shaped like the live one, for the golden and
+statement-budget tests.
 
 Schema and indexes are poller/init_db.py's. The old /weather/history picks its 4 pm
 baseline row with ORDER BY ... LIMIT 1, and SQLite breaks ties in index order, so the

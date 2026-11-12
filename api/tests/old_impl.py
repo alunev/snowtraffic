@@ -1,5 +1,5 @@
-"""The pre-S2 /segments and /weather/history, kept as the reference the new
-single-query versions must match byte for byte (test_s2_queries.py) and as the
+"""The old per-timestamp /segments and /weather/history, kept as the reference the new
+single-query versions must match byte for byte (test_history_endpoints.py) and as the
 positive control for the statement-budget test: this is the per-timestamp loop.
 
 The two blocks between the markers are verbatim copies of api/main.py at commit

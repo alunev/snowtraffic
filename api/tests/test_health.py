@@ -3,7 +3,7 @@ control: it makes one defect present on top of the all-fresh fixture and must
 turn the endpoint red, while the all-fresh fixture must stay green.
 
 GET /health is the public twin: the same verdict with no detail, exactly
-{"status":"ok"} (200) or {"status":"fail"} (503) (comb-0xqi.20)."""
+{"status":"ok"} (200) or {"status":"fail"} (503)."""
 import json
 import sqlite3
 from collections import namedtuple

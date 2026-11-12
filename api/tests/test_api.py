@@ -204,7 +204,7 @@ class TestHistoryEndpoint:
         assert len(data) <= limit
 
     def test_history_for_nonexistent_route_is_404(self, client):
-        """An unknown route id is a 404, like /current/{id} (comb-0xqi.20)."""
+        """An unknown route id is a 404, like /current/{id}."""
         response = client.get("/history/nonexistent_route_999")
         assert response.status_code == 404
 

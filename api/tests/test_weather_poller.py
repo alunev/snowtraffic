@@ -1,5 +1,5 @@
-"""poller/poll_weather.py: a malformed SNOTEL reading is skipped, never inserted
-(comb-0xqi.20, roast finding B7). One such row used to make /weather/* return 500
+"""poller/poll_weather.py: a malformed SNOTEL reading is skipped, never inserted.
+One such row used to make /weather/* return 500
 until someone edited the database.
 
 poll_weather imports config, which loads .env; a stub config stands in for it, so

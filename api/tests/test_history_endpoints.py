@@ -1,8 +1,8 @@
 """/segments and /weather/history: same JSON as the old per-timestamp loop, in a
-bounded number of SQL statements (comb-0xqi.20, roast finding B1).
+bounded number of SQL statements.
 
-The reference is tests/old_impl.py, a verbatim copy of the pre-S2 endpoints.
-Both apps read the same seeded database. Two behaviour changes since (comb-0xqi.27, S5d),
+The reference is tests/old_impl.py, a verbatim copy of the old per-timestamp endpoints.
+Both apps read the same seeded database. Two behaviour changes since,
 so the golden comparison asks the old loop for what the new code should now return:
 - /segments defaults to limit=5000 (was 1000), so the old loop is asked with limit=5000.
 - /weather/history's window is honest: hours=24 is the last 24 h of recorded_at, where the

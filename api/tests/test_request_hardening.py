@@ -1,4 +1,4 @@
-"""S2 hardening (comb-0xqi.20): hours capped at 720 with every UI request still valid,
+"""Request hardening: hours capped at 720 with every UI request still valid,
 docs off, no trailing-slash redirect, archived and unknown routes 404, and weather
 rows with no measured_at no longer break /weather/*."""
 import re
@@ -61,7 +61,7 @@ def ui_requests():
 
 
 def test_ui_request_list():
-    """The list quoted on the bead. A new UI request shows up here first."""
+    """The UI's requests, listed in full. A new UI request shows up here first."""
     templates, ranges, urls = ui_requests()
     assert sorted(templates) == ["/current", "/routes", "/segments/${routeId}?hours=${hours}",
                                  "/weather/current", "/weather/history?hours=${hours}"]

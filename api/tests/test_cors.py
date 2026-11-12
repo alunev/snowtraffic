@@ -70,7 +70,7 @@ def test_write_methods_refused_for_domain(prod_client):
     "https://evil.example", "http://localhost:5173", "null",
 ])
 def test_no_credentials_header_for_any_origin(prod_client, origin):
-    """No cookies or auth exist to share, so CORS never says credentials are allowed
-    (roast finding A5). The allowed origins above still get Allow-Origin."""
+    """No cookies or auth exist to share, so CORS never says credentials are allowed.
+    The allowed origins above still get Allow-Origin."""
     for r in (prod_client.get("/", headers={"Origin": origin}), preflight(prod_client, origin)):
         assert "access-control-allow-credentials" not in r.headers

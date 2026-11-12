@@ -241,7 +241,7 @@ def get_health():
 @app.get("/internal/health")
 def get_internal_health():
     """The same check with the detail: failing rows, ages, disk, db_error.
-    Meant for 127.0.0.1 only; nginx refuses /api/internal/ (S3)."""
+    Meant for 127.0.0.1 only; nginx refuses /api/internal/."""
     failing, body = check_health()
     return JSONResponse(
         status_code=503 if failing else 200,
