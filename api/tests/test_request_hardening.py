@@ -124,11 +124,13 @@ def test_active_route_still_answers(client, path, route_id):
 
 # --- weather rows with no measured_at ------------------------------------------
 
-WEATHER = ["/weather/current", "/weather/history?hours=720", "/weather/snotel-791"]
-
-
-@pytest.mark.parametrize("path", WEATHER)
-def test_null_measured_at_row_is_ignored(db, client, path):
+def test_null_measured_at_row_is_ignored(db, client):
+    """/weather/history grouped the NULL row with the rest and crashed in
+    datetime.fromisoformat(None) (500); now it is skipped. /weather/current and
+    /weather/<station> never picked it while a dated row exists (MAX() skips NULL,
+    NULL sorts last in DESC), so they are not tested here; the next test covers a
+    station whose only row is NULL."""
+    path = "/weather/history?hours=720"
     clean = client.get(path)
     assert clean.status_code == 200
     with sqlite3.connect(db) as conn:
