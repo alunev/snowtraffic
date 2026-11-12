@@ -58,6 +58,9 @@ BAD = {
     "measured_at missing": reading(measured_at=None),
     "measured_at empty": reading(measured_at=""),
     "measured_at garbage": reading(measured_at="yesterday-ish"),
+    "measured_at compact date": reading(measured_at="20261110"),  # SQLite would store an integer
+    "measured_at compact date and time": reading(measured_at="20261110T2200"),
+    "measured_at impossible date": reading(measured_at="2026-13-45"),
     "measured_at not a string": reading(measured_at=20261110),
     "all values empty": reading(temperature_f=None, snow_depth_inches=None, total_precip_inches=None),
     "value is text": reading(snow_depth_inches="abc"),

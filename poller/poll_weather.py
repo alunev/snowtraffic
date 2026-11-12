@@ -1,5 +1,6 @@
 """Poll SNOTEL weather station data and store in SQLite."""
 import math
+import re
 import requests
 import sqlite3
 from datetime import datetime, timedelta
@@ -83,6 +84,9 @@ def fetch_snotel_data(station):
 
 
 VALUE_FIELDS = ("temperature_f", "snow_depth_inches", "total_precip_inches")
+# SNOTEL's shape: a date, then optionally a space or T and HH:MM (seconds optional).
+# fromisoformat alone also takes the compact 20261110, which SQLite stores as an integer.
+MEASURED_AT_SHAPE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}([ T][0-9]{2}:[0-9]{2}(:[0-9]{2})?)?")
 
 
 def reading_problem(weather_data):
@@ -93,6 +97,8 @@ def reading_problem(weather_data):
     measured_at = weather_data.get("measured_at")
     if not isinstance(measured_at, str):
         return f"measured_at is {measured_at!r}"
+    if not MEASURED_AT_SHAPE.fullmatch(measured_at):
+        return f"measured_at {measured_at!r} is not YYYY-MM-DD[ HH:MM[:SS]]"
     try:
         datetime.fromisoformat(measured_at)
     except ValueError:
