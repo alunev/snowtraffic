@@ -15,9 +15,16 @@ import main
 ARG_READERS = re.compile(r"^/(segments|history|weather/history)")
 
 
+def names(dependant):
+    """Query parameter names of a route, including those declared inside a Depends()."""
+    found = {p.name for p in dependant.query_params}
+    for sub in dependant.dependencies:
+        found |= names(sub)
+    return found
+
+
 def query_params():
-    return {r.path: sorted(p.name for p in r.dependant.query_params)
-            for r in main.app.routes if isinstance(r, APIRoute)}
+    return {r.path: sorted(names(r.dependant)) for r in main.app.routes if isinstance(r, APIRoute)}
 
 
 def test_only_the_history_endpoints_take_query_params():
