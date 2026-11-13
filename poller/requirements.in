@@ -5,4 +5,4 @@
 # The VPS installs requirements.txt with --require-hashes --only-binary :all:.
 requests==2.34.2
 python-dotenv==1.2.4
-boto3==1.43.126
+boto3==1.44.0
