@@ -16,8 +16,11 @@ ARG_READERS = re.compile(r"^/(segments|history|weather/history)")
 
 
 def names(dependant):
-    """Query parameter names of a route, including those declared inside a Depends()."""
+    """Query parameter names of a route, including those declared inside a Depends(). A route
+    that takes the raw Request can read any query arg, so it counts as reading "<request>"."""
     found = {p.name for p in dependant.query_params}
+    if dependant.request_param_name:
+        found.add("<request>")
     for sub in dependant.dependencies:
         found |= names(sub)
     return found
