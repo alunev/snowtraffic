@@ -186,8 +186,12 @@ def check_health():
                     failing.append(f"traffic:{route_id}")
             body["traffic_age_min"] = traffic
 
-            cursor.execute("SELECT MAX(recorded_at) FROM weather_data")
-            weather_age = _age_min(cursor.fetchone()[0])
+            # The newest row by id, not MAX(recorded_at): recorded_at has no index, so MAX reads
+            # every row on every uncached call. The weather poller stamps recorded_at with the
+            # time of the insert, so the newest id carries the newest recorded_at.
+            cursor.execute("SELECT recorded_at FROM weather_data ORDER BY id DESC LIMIT 1")
+            row = cursor.fetchone()
+            weather_age = _age_min(row[0] if row else None)
             body["weather_age_min"] = weather_age
             if weather_age is None or weather_age > WEATHER_MAX_AGE_MIN:
                 failing.append("weather")

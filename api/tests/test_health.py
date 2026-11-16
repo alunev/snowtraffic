@@ -206,6 +206,58 @@ def test_no_weather_rows_is_red(box):
     assert body["weather_age_min"] is None
 
 
+def test_weather_age_reads_one_row_not_the_table(box, monkeypatch):
+    """/health is never cached, so its weather query must cost the same at any table size.
+    MAX(recorded_at) reads every row (no index on recorded_at); the newest row by id is one
+    b-tree step. SQLite's plan text cannot tell them apart (it says SEARCH for the MAX and SCAN
+    for the ORDER BY id DESC LIMIT 1), so this counts the VM steps each statement takes."""
+    with sqlite3.connect(box.db) as conn:
+        conn.executemany(
+            "INSERT INTO weather_data (station_id, measured_at, recorded_at)"
+            " VALUES ('snotel-791', ?, ?)",
+            [(naive_ago(days=400, minutes=-15 * i),) * 2 for i in range(20000)])
+    box.all_fresh()  # the newest rows come last, as the poller writes them
+
+    steps = {}
+    connect = main.get_db_connection
+
+    def counting_connection():
+        conn = connect()
+        sql = [None]
+
+        def tick():
+            steps[sql[0]] = steps.get(sql[0], 0) + 1
+            return 0
+        conn.set_progress_handler(tick, 1)
+
+        class Cursor:
+            def __init__(self, cur):
+                self.cur = cur
+
+            def execute(self, statement, *args):
+                sql[0] = statement
+                return self.cur.execute(statement, *args)
+
+            def fetchone(self):
+                return self.cur.fetchone()
+
+        class Connection:
+            def cursor(self):
+                return Cursor(conn.cursor())
+
+            def close(self):
+                conn.close()
+        return Connection()
+
+    monkeypatch.setattr(main, "get_db_connection", counting_connection)
+    r, body = box.get()
+    assert r.status_code == 200, body
+    assert body["weather_age_min"] == 5
+    weather = {s: n for s, n in steps.items() if "weather_data" in s}
+    assert len(weather) == 1, steps
+    assert max(weather.values()) < 1000, weather  # MAX(recorded_at) here: about 160,000
+
+
 @pytest.mark.parametrize("pct, healthy", [(79, True), (85, False)])
 def test_disk(box, pct, healthy):
     box.all_fresh().disk_pct = pct
