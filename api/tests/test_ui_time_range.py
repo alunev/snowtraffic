@@ -20,7 +20,7 @@ COMPONENT = re.compile(r"^function (\w+)\((?:\{([^}]*)\})?\)", re.M)
 
 
 def read_sources(src):
-    return {p.name: p.read_text() for p in sorted(src.rglob("*.jsx"))}
+    return {p.relative_to(src).as_posix(): p.read_text() for p in sorted(src.rglob("*.jsx"))}
 
 
 def owner(sources, name, file, depth=0):
@@ -55,7 +55,7 @@ def selectors(sources):
 def test_both_charts_share_one_time_range():
     found = selectors(read_sources(UI_SRC))
     # Absent is not empty: the two charts' selectors must both be seen.
-    assert sorted(f for f, _, _ in found) == ["App.jsx", "WeatherChart.jsx"]
+    assert sorted(f for f, _, _ in found) == ["App.jsx", "components/WeatherChart.jsx"]
     assert all(values == [24, 168, 720] for _, values, _ in found)
     owners = set().union(*(o for _, _, o in found))
     assert owners == {("App.jsx", "timeRange")}
@@ -74,4 +74,4 @@ def test_tripwire_weather_chart_with_its_own_state(tmp_path):
                               "  const [timeRange, setTimeRange] = useState(24) // hours")
     chart.write_text(text.replace("onTimeRangeChange(", "setTimeRange("))
     owners = set().union(*(o for _, _, o in selectors(read_sources(src))))
-    assert owners == {("App.jsx", "timeRange"), ("WeatherChart.jsx", "timeRange")}
+    assert owners == {("App.jsx", "timeRange"), ("components/WeatherChart.jsx", "timeRange")}
