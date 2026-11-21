@@ -1,2 +1,12 @@
+# Crawlers may fetch the page and the five API reads it makes on load, so a renderer
+# sees the drive times and snow; the rest of the API stays off limits. The longest
+# matching rule wins, so each Allow beats the shorter Disallow below it.
 User-agent: *
+Allow: /api/routes$
+Allow: /api/current$
+Allow: /api/weather/current$
+Allow: /api/segments/
+Allow: /api/weather/history?
 Disallow: /api/
+
+Sitemap: https://firstchair.live/sitemap.xml
