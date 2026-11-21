@@ -5,8 +5,10 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import json
+import os
 import shutil
 import sqlite3
+import stat
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -24,6 +26,8 @@ DB_PATH = Path(__file__).parent.parent / "data" / "traffic.db"
 # /health inputs. The stamps are written by /opt/backup-snowtraffic.sh (0644, readable by the API user).
 BACKUPS_DIR = DB_PATH.parent / "backups"
 DISK_PATH = "/"
+# The weather poller writes stamp-weather.json next to traffic.db on every run (0644).
+WEATHER_STAMP_NAME = "stamp-weather.json"
 
 # /health thresholds
 TRAFFIC_MAX_AGE_MIN = 90   # two missed polls at */30
@@ -31,6 +35,12 @@ WEATHER_MAX_AGE_MIN = 60   # SNOTEL misses write no row, so 45 would fail on two
 DISK_MAX_PCT = 80
 BACKUP_MAX_AGE_H = 26      # nightly at 02:10 UTC
 OFFBOX_MAX_AGE_H = 36      # the off-box stamp is only rewritten after a verified upload
+WEATHER_POLLER_MAX_AGE_MIN = 60  # the weather poller's stamp, rewritten every */15 run
+
+# What the weather poller records when the snow source did not answer at all: these are
+# requests' transport errors. Its other errors (a bad URL, a body we cannot parse) are ours.
+UPSTREAM_UNREACHABLE = {"ConnectionError", "ConnectTimeout", "ReadTimeout", "Timeout",
+                        "SSLError", "ChunkedEncodingError"}
 
 # Query caps: 30 days (the UI's largest view) and 5000 rows per request
 MAX_HOURS = 720
@@ -146,18 +156,37 @@ def _age_min(newest: Optional[str]) -> Optional[int]:
     return int((datetime.now() - datetime.fromisoformat(newest)).total_seconds() // 60)
 
 
-def _read_stamp(name: str) -> dict:
-    """A backup stamp as a dict with an aware `at`; raises ValueError on a bad stamp."""
-    path = BACKUPS_DIR / name
+class _BadStamp(ValueError):
+    """A stamp that is there but cannot be used; the message is the detail row."""
+
+
+def _read_text_nofollow(path: Path) -> str:
+    """A regular file's text. data/ is writable by the poller user, so a name there is
+    never followed as a symlink, and a FIFO is refused instead of blocking the open."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
-        stamp = json.loads(path.read_text())
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise _BadStamp(f"{path.name} unreadable: not a regular file")
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            return f.read(65536).decode()
+    finally:
+        os.close(fd)
+
+
+def _read_stamp(path: Path) -> dict:
+    """A stamp as a dict with an aware `at`; raises ValueError on a bad stamp."""
+    name = path.name
+    try:
+        stamp = json.loads(_read_text_nofollow(path))
         at = datetime.fromisoformat(stamp["at"])
     except FileNotFoundError:
-        raise ValueError(f"{name} missing")
+        raise _BadStamp(f"{name} missing")
+    except _BadStamp:
+        raise
     except (OSError, ValueError, KeyError, TypeError) as e:
-        raise ValueError(f"{name} unreadable: {type(e).__name__}")
+        raise _BadStamp(f"{name} unreadable: {type(e).__name__}")
     if at.tzinfo is None:
-        raise ValueError(f"{name} unreadable: at has no timezone")
+        raise _BadStamp(f"{name} unreadable: at has no timezone")
     stamp["at"] = at
     return stamp
 
@@ -166,10 +195,36 @@ def _age_h(at: datetime) -> float:
     return round((datetime.now(timezone.utc) - at).total_seconds() / 3600, 1)
 
 
+def _read_weather_stamp() -> dict:
+    """The weather poller's last run: {"at", "status", "error", "saved"}; ValueError if bad."""
+    name = WEATHER_STAMP_NAME
+    stamp = _read_stamp(DB_PATH.parent / name)
+    status, error, saved = stamp.get("status"), stamp.get("error"), stamp.get("saved")
+    if status is not None and type(status) is not int:
+        raise ValueError(f"{name} unreadable: status is {status!r}")
+    if error is not None and not isinstance(error, str):
+        raise ValueError(f"{name} unreadable: error is {error!r}")
+    if type(saved) is not int:
+        raise ValueError(f"{name} unreadable: saved is {saved!r}")
+    return stamp
+
+
+def _upstream_down(stamp: dict) -> bool:
+    """The snow source failed on its side: no answer at all, or a server error. An answer we
+    could not use (2xx-4xx, a body that does not parse) or a run that never reached it is ours."""
+    status = stamp["status"]
+    if status is None:
+        return stamp["error"] in UPSTREAM_UNREACHABLE
+    return status >= 500
+
+
 def check_health():
-    """Freshness of every moving part: (failing rows, detail body)."""
+    """Freshness of every moving part: (failing rows, detail body). body["degraded"] lists
+    what is stale but not ours to fix (the snow source down); it never fails the check."""
     failing = []
-    body = {}
+    degraded = []
+    body = {"degraded": degraded}
+    weather_age = None
 
     active_routes = [r["id"] for r in ROUTES if r["id"] not in ARCHIVED_ROUTES]
     try:
@@ -193,14 +248,14 @@ def check_health():
             row = cursor.fetchone()
             weather_age = _age_min(row[0] if row else None)
             body["weather_age_min"] = weather_age
-            if weather_age is None or weather_age > WEATHER_MAX_AGE_MIN:
-                failing.append("weather")
         finally:
             conn.close()
     except (sqlite3.Error, HTTPException, ValueError) as e:
         # e.g. a hot journal left by a crashed poller makes a read-only open fail
         body["db_error"] = str(getattr(e, "detail", e))
         failing.append("db")
+    else:
+        _check_weather(weather_age, failing, degraded, body)
 
     usage = shutil.disk_usage(DISK_PATH)
     disk_pct = round(100 * usage.used / (usage.used + usage.free), 1)  # df's Use%
@@ -209,7 +264,7 @@ def check_health():
         failing.append("disk")
 
     try:
-        snapshot = _read_stamp("stamp-snapshot.json")
+        snapshot = _read_stamp(BACKUPS_DIR / "stamp-snapshot.json")
         body["backup_age_h"] = _age_h(snapshot["at"])
         body["backup_check"] = snapshot.get("integrity_check")
         if body["backup_age_h"] > BACKUP_MAX_AGE_H:
@@ -222,7 +277,7 @@ def check_health():
         failing.append("backup_stamp")
 
     try:
-        body["offbox_age_h"] = _age_h(_read_stamp("stamp-offbox.json")["at"])
+        body["offbox_age_h"] = _age_h(_read_stamp(BACKUPS_DIR / "stamp-offbox.json")["at"])
         if body["offbox_age_h"] > OFFBOX_MAX_AGE_H:
             failing.append("offbox_age")
     except ValueError as e:
@@ -231,6 +286,37 @@ def check_health():
         failing.append("offbox_stamp")
 
     return failing, body
+
+
+def _check_weather(weather_age, failing, degraded, body):
+    """Stale weather is red only when our side is at fault. The poller's stamp says whether it
+    still runs and how the snow source answered: a live poller and a source that is down is
+    degraded however long it lasts, since a red check for the whole outage hides a real one."""
+    try:
+        stamp = _read_weather_stamp()
+        poller_age = _age_min_utc(stamp["at"])
+        body["weather_poller_age_min"] = poller_age
+        body["weather_upstream"] = {"status": stamp["status"], "error": stamp["error"]}
+        body["weather_saved"] = stamp["saved"]
+        poller_fresh = poller_age <= WEATHER_POLLER_MAX_AGE_MIN
+    except ValueError as e:
+        body["weather_poller_age_min"] = None
+        body["weather_poller_error"] = str(e)
+        stamp, poller_fresh = None, False
+
+    if weather_age is not None and weather_age <= WEATHER_MAX_AGE_MIN:
+        if not poller_fresh:
+            degraded.append("weather_poller")  # rows are fresh, so the poller does run
+    elif not poller_fresh:
+        failing.append("weather_poller")
+    elif _upstream_down(stamp):
+        degraded.append("weather")
+    else:
+        failing.append("weather")
+
+
+def _age_min_utc(at: datetime) -> int:
+    return int((datetime.now(timezone.utc) - at).total_seconds() // 60)
 
 
 @app.get("/health")
@@ -244,7 +330,7 @@ def get_health():
 
 @app.get("/internal/health")
 def get_internal_health():
-    """The same check with the detail: failing rows, ages, disk, db_error.
+    """The same check with the detail: failing and degraded rows, ages, disk, db_error.
     Meant for 127.0.0.1 only; nginx refuses /api/internal/."""
     failing, body = check_health()
     return JSONResponse(
