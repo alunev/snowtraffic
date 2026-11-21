@@ -241,7 +241,7 @@ function App() {
         )}
 
         {/* Weather Chart */}
-        <WeatherChart />
+        <WeatherChart timeRange={timeRange} onTimeRangeChange={setTimeRange} />
 
         {/* Info Section */}
         <div className="info-section">

@@ -15,11 +15,10 @@ import './WeatherChart.css'
 
 const API_BASE_URL = '/api'
 
-function WeatherChart() {
+function WeatherChart({ timeRange, onTimeRangeChange }) {
   const [weatherHistory, setWeatherHistory] = useState([])
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [timeRange, setTimeRange] = useState(24) // hours
 
   useEffect(() => {
     fetchWeatherHistory(timeRange)
@@ -126,19 +125,19 @@ function WeatherChart() {
           <div className="time-range-selector">
             <button
               className={timeRange === 24 ? 'active' : ''}
-              onClick={() => setTimeRange(24)}
+              onClick={() => onTimeRangeChange(24)}
             >
               24 Hours
             </button>
             <button
               className={timeRange === 168 ? 'active' : ''}
-              onClick={() => setTimeRange(168)}
+              onClick={() => onTimeRangeChange(168)}
             >
               7 Days
             </button>
             <button
               className={timeRange === 720 ? 'active' : ''}
-              onClick={() => setTimeRange(720)}
+              onClick={() => onTimeRangeChange(720)}
             >
               30 Days
             </button>
