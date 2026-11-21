@@ -36,11 +36,7 @@ DISK_MAX_PCT = 80
 BACKUP_MAX_AGE_H = 26      # nightly at 02:10 UTC
 OFFBOX_MAX_AGE_H = 36      # the off-box stamp is only rewritten after a verified upload
 WEATHER_POLLER_MAX_AGE_MIN = 60  # the weather poller's stamp, rewritten every */15 run
-
-# What the weather poller records when the snow source did not answer at all: these are
-# requests' transport errors. Its other errors (a bad URL, a body we cannot parse) are ours.
-UPSTREAM_UNREACHABLE = {"ConnectionError", "ConnectTimeout", "ReadTimeout", "Timeout",
-                        "SSLError", "ChunkedEncodingError"}
+WEATHER_POLLER_SKEW_MIN = 5      # a stamp further in the future than this is not fresh
 
 # Query caps: 30 days (the UI's largest view) and 5000 rows per request
 MAX_HOURS = 720
@@ -183,7 +179,7 @@ def _read_stamp(path: Path) -> dict:
         raise _BadStamp(f"{name} missing")
     except _BadStamp:
         raise
-    except (OSError, ValueError, KeyError, TypeError) as e:
+    except (OSError, ValueError, KeyError, TypeError, RecursionError) as e:
         raise _BadStamp(f"{name} unreadable: {type(e).__name__}")
     if at.tzinfo is None:
         raise _BadStamp(f"{name} unreadable: at has no timezone")
@@ -196,26 +192,20 @@ def _age_h(at: datetime) -> float:
 
 
 def _read_weather_stamp() -> dict:
-    """The weather poller's last run: {"at", "status", "error", "saved"}; ValueError if bad."""
+    """The weather poller's last run: {"at", "status", "error", "upstream_down", "saved"};
+    ValueError if bad. The poller decides upstream_down: it holds the exception's type."""
     name = WEATHER_STAMP_NAME
     stamp = _read_stamp(DB_PATH.parent / name)
     status, error, saved = stamp.get("status"), stamp.get("error"), stamp.get("saved")
+    if type(stamp.get("upstream_down")) is not bool:
+        raise _BadStamp(f"{name} unreadable: upstream_down is {stamp.get('upstream_down')!r}")
     if status is not None and type(status) is not int:
-        raise ValueError(f"{name} unreadable: status is {status!r}")
+        raise _BadStamp(f"{name} unreadable: status is {status!r}")
     if error is not None and not isinstance(error, str):
-        raise ValueError(f"{name} unreadable: error is {error!r}")
+        raise _BadStamp(f"{name} unreadable: error is {error!r}")
     if type(saved) is not int:
-        raise ValueError(f"{name} unreadable: saved is {saved!r}")
+        raise _BadStamp(f"{name} unreadable: saved is {saved!r}")
     return stamp
-
-
-def _upstream_down(stamp: dict) -> bool:
-    """The snow source failed on its side: no answer at all, or a server error. An answer we
-    could not use (2xx-4xx, a body that does not parse) or a run that never reached it is ours."""
-    status = stamp["status"]
-    if status is None:
-        return stamp["error"] in UPSTREAM_UNREACHABLE
-    return status >= 500
 
 
 def check_health():
@@ -296,9 +286,10 @@ def _check_weather(weather_age, failing, degraded, body):
         stamp = _read_weather_stamp()
         poller_age = _age_min_utc(stamp["at"])
         body["weather_poller_age_min"] = poller_age
-        body["weather_upstream"] = {"status": stamp["status"], "error": stamp["error"]}
+        body["weather_upstream"] = {"status": stamp["status"], "error": stamp["error"],
+                                    "down": stamp["upstream_down"]}
         body["weather_saved"] = stamp["saved"]
-        poller_fresh = poller_age <= WEATHER_POLLER_MAX_AGE_MIN
+        poller_fresh = -WEATHER_POLLER_SKEW_MIN <= poller_age <= WEATHER_POLLER_MAX_AGE_MIN
     except ValueError as e:
         body["weather_poller_age_min"] = None
         body["weather_poller_error"] = str(e)
@@ -309,7 +300,7 @@ def _check_weather(weather_age, failing, degraded, body):
             degraded.append("weather_poller")  # rows are fresh, so the poller does run
     elif not poller_fresh:
         failing.append("weather_poller")
-    elif _upstream_down(stamp):
+    elif stamp["upstream_down"]:
         degraded.append("weather")
     else:
         failing.append("weather")

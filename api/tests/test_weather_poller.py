@@ -173,39 +173,55 @@ def test_a_good_run_writes_the_heartbeat(poller, db, upstream):
     upstream.answer = Response(200, SNOTEL_OK)
     poller.main()
     assert upstream.calls == 1
-    assert heartbeat(db) == {"status": 200, "error": None, "saved": 1}
+    assert heartbeat(db) == {"status": 200, "error": None, "upstream_down": False, "saved": 1}
     assert rows(db) == [("2026-11-20 22:00", None, 41.0, None)]
 
 
-@pytest.mark.parametrize("status", [500, 502, 403])
-def test_an_http_error_writes_the_heartbeat(poller, db, upstream, status):
+# HTTP answers: 5xx and 404 are SNOTEL's own outages (the live log since January has 500,
+# 502, 503, 504 and an 8.5 h run of 404s that ended with no change on our side). Other 4xx
+# mean it refused our request: a changed API, a ban, a rate limit.
+@pytest.mark.parametrize("status, down", [(500, True), (502, True), (503, True), (504, True),
+                                          (404, True), (400, False), (403, False),
+                                          (429, False), (301, False)])
+def test_an_http_error_writes_the_heartbeat(poller, db, upstream, status, down):
     upstream.answer = Response(status)
     poller.main()
     assert upstream.calls == 1  # one request a run, no retry
-    assert heartbeat(db) == {"status": status, "error": None, "saved": 0}
+    assert heartbeat(db) == {"status": status, "error": None, "upstream_down": down, "saved": 0}
     assert rows(db) == []
 
 
-@pytest.mark.parametrize("exc", [requests.exceptions.ReadTimeout("read timed out"),
-                                 requests.exceptions.ConnectTimeout("connect timed out"),
-                                 requests.exceptions.ConnectionError("refused")])
-def test_a_timeout_or_refused_connection_writes_the_heartbeat(poller, db, upstream, exc):
+@pytest.mark.parametrize("exc, down", [
+    (requests.exceptions.ReadTimeout("read timed out"), True),
+    (requests.exceptions.ConnectTimeout("connect timed out"), True),
+    (requests.exceptions.ConnectionError("refused"), True),
+    (requests.exceptions.SSLError("handshake"), True),
+    (requests.exceptions.ChunkedEncodingError("dropped mid-body"), True),
+    (requests.exceptions.InvalidURL("our config"), False),
+    (requests.exceptions.MissingSchema("our config"), False),
+    (requests.exceptions.TooManyRedirects("a loop"), False),
+    (ConnectionError("the builtin, not requests'"), False),
+    (KeyError("ours"), False),
+])
+def test_a_request_that_raised_writes_the_heartbeat(poller, db, upstream, exc, down):
     upstream.answer = exc
     poller.main()
     assert upstream.calls == 1
-    assert heartbeat(db) == {"status": None, "error": type(exc).__name__, "saved": 0}
+    assert heartbeat(db) == {"status": None, "error": type(exc).__name__,
+                             "upstream_down": down, "saved": 0}
 
 
 def test_a_200_we_cannot_read_writes_the_heartbeat(poller, db, upstream):
     upstream.answer = Response(200, bad_json=True)
     poller.main()
-    assert heartbeat(db) == {"status": 200, "error": "JSONDecodeError", "saved": 0}
+    assert heartbeat(db) == {"status": 200, "error": "JSONDecodeError", "upstream_down": False,
+                             "saved": 0}
 
 
 def test_a_200_with_a_malformed_reading_says_nothing_saved(poller, db, upstream):
     upstream.answer = Response(200, [{"data": []}])
     poller.main()
-    assert heartbeat(db) == {"status": 200, "error": None, "saved": 0}
+    assert heartbeat(db) == {"status": 200, "error": None, "upstream_down": False, "saved": 0}
 
 
 def test_a_failed_db_write_still_writes_the_heartbeat_and_fails_the_run(poller, db, upstream):
@@ -216,15 +232,18 @@ def test_a_failed_db_write_still_writes_the_heartbeat_and_fails_the_run(poller, 
     upstream.answer = Response(200, SNOTEL_OK)
     with pytest.raises(sqlite3.OperationalError):
         poller.main()
-    assert heartbeat(db) == {"status": 200, "error": None, "saved": 0}
+    assert heartbeat(db) == {"status": 200, "error": None, "upstream_down": False, "saved": 0}
 
 
-def test_a_heartbeat_write_failure_does_not_stop_the_poll(poller, db, upstream, monkeypatch):
-    """The row matters more than the stamp: an unwritable stamp is printed, the row is saved."""
+def test_a_heartbeat_write_failure_does_not_stop_the_poll(poller, db, upstream, capsys):
+    """The row matters more than the stamp: an unwritable stamp is printed, the row is saved,
+    and no temp file is left behind."""
     (db.parent / "stamp-weather.json").mkdir()  # os.replace onto a directory fails
     upstream.answer = Response(200, SNOTEL_OK)
     poller.main()
     assert len(rows(db)) == 1
+    assert "ERROR writing stamp-weather.json" in capsys.readouterr().out
+    assert sorted(p.name for p in db.parent.iterdir()) == ["stamp-weather.json", "traffic.db"]
 
 
 def test_the_temp_file_never_matches_the_backup_sweep(poller, db, upstream, monkeypatch):

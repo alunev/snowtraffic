@@ -82,10 +82,10 @@ class Box:
         self.stamp("stamp-snapshot.json", json.dumps(
             {"at": at, "file": "x.db", "integrity_check": check, "bytes": 1}))
 
-    def heartbeat(self, at, status=200, error=None, saved=1):
+    def heartbeat(self, at, status=200, error=None, saved=1, down=False):
         """The weather poller's per-run stamp, next to traffic.db."""
         (self.db.parent / "stamp-weather.json").write_text(json.dumps(
-            {"at": at, "status": status, "error": error, "saved": saved}))
+            {"at": at, "status": status, "error": error, "upstream_down": down, "saved": saved}))
 
     def stale_weather(self, **ago):
         with sqlite3.connect(self.db) as conn:
@@ -150,7 +150,7 @@ def test_all_fresh_is_green(box):
     assert body["offbox_age_h"] == pytest.approx(2, abs=0.1)
     assert body["degraded"] == []
     assert body["weather_poller_age_min"] == 5
-    assert body["weather_upstream"] == {"status": 200, "error": None}
+    assert body["weather_upstream"] == {"status": 200, "error": None, "down": False}
     assert body["weather_saved"] == 1
 
 
@@ -385,28 +385,28 @@ def assert_green(r, body, degraded):
     assert (r.public.status_code, r.public.content) == (200, b'{"status":"ok"}')
 
 
-# What the poller records when USDA does not answer, or answers with a server error
-UPSTREAM_DOWN = [(502, None), (500, None), (503, None), (None, "ReadTimeout"),
-                 (None, "ConnectTimeout"), (None, "ConnectionError"), (None, "SSLError"),
-                 (None, "ChunkedEncodingError")]
+# What the poller records when USDA is down: it sets upstream_down (test_weather_poller.py
+# pins which answers those are); /health only reads the flag.
+UPSTREAM_DOWN = [(502, None), (500, None), (503, None), (404, None), (None, "ReadTimeout"),
+                 (None, "ConnectionError")]
 
 
 @pytest.mark.parametrize("status, error", UPSTREAM_DOWN)
 def test_upstream_outage_with_a_live_poller_is_degraded_not_red(box, status, error):
     """The 2026-11-16 outage: USDA failing for hours while the poller runs every 15 min."""
     box.all_fresh().stale_weather(hours=3)
-    box.heartbeat(utc_stamp_ago(minutes=4), status=status, error=error, saved=0)
+    box.heartbeat(utc_stamp_ago(minutes=4), status=status, error=error, saved=0, down=True)
     r, body = box.get()
     assert_green(r, body, ["weather"])
     assert body["weather_age_min"] == 180
     assert body["weather_poller_age_min"] == 4
-    assert body["weather_upstream"] == {"status": status, "error": error}
+    assert body["weather_upstream"] == {"status": status, "error": error, "down": True}
     assert body["weather_saved"] == 0
 
 
 def test_a_very_long_upstream_outage_stays_degraded(box):
     box.all_fresh().stale_weather(days=4)
-    box.heartbeat(utc_stamp_ago(minutes=10), status=502, saved=0)
+    box.heartbeat(utc_stamp_ago(minutes=10), status=502, saved=0, down=True)
     r, body = box.get()
     assert_green(r, body, ["weather"])
 
@@ -415,7 +415,7 @@ def test_upstream_outage_with_no_weather_rows_at_all_is_degraded(box):
     box.all_fresh()
     with sqlite3.connect(box.db) as conn:
         conn.execute("DELETE FROM weather_data")
-    box.heartbeat(utc_stamp_ago(minutes=10), status=None, error="ReadTimeout", saved=0)
+    box.heartbeat(utc_stamp_ago(minutes=10), status=None, error="ReadTimeout", saved=0, down=True)
     r, body = box.get()
     assert_green(r, body, ["weather"])
     assert body["weather_age_min"] is None
@@ -435,7 +435,7 @@ def test_stale_weather_and_old_heartbeat(box, minutes, healthy):
     """The poller stopped (cron, venv, permissions): its last word was an upstream failure,
     but that is old news."""
     box.all_fresh().stale_weather(hours=3)
-    box.heartbeat(utc_stamp_ago(minutes=minutes), status=502, saved=0)
+    box.heartbeat(utc_stamp_ago(minutes=minutes), status=502, saved=0, down=True)
     r, body = box.get()
     assert body["weather_poller_age_min"] == minutes
     if healthy:
@@ -448,7 +448,7 @@ def test_stale_weather_and_old_heartbeat(box, minutes, healthy):
     (200, None),                # answered, and nothing was saved: our parse or DB write
     (200, "JSONDecodeError"),   # answered with a body we cannot read
     (200, "OperationalError"),  # answered, the DB write raised
-    (400, None), (403, None), (404, None), (429, None),  # refused our request
+    (400, None), (403, None), (429, None),  # refused our request
     (None, None),               # no fetch recorded at all
     (None, "InvalidURL"),       # never reached USDA: our config
     (None, "MissingSchema"),
@@ -463,7 +463,7 @@ def test_stale_weather_when_the_upstream_answered_is_red(box, status, error):
 
 def test_fresh_weather_with_an_upstream_failure_is_green(box):
     """One failed poll inside the hour is not news: the last row is still fresh."""
-    box.all_fresh().heartbeat(utc_stamp_ago(minutes=4), status=502, saved=0)
+    box.all_fresh().heartbeat(utc_stamp_ago(minutes=4), status=502, saved=0, down=True)
     r, body = box.get()
     assert_green(r, body, [])
 
@@ -490,10 +490,17 @@ def test_fresh_weather_and_old_heartbeat_is_green_but_listed(box):
     ('{"at": "2026-11-20T10:00:00", "status": 502}',
      "stamp-weather.json unreadable: at has no timezone"),
     ('[1, 2]', "stamp-weather.json unreadable: TypeError"),
-    ('{"at": "%s", "status": "502", "error": null, "saved": 0}',
+    ('{"at": "%s", "status": "502", "error": null, "upstream_down": true, "saved": 0}',
      "stamp-weather.json unreadable: status is '502'"),
-    ('{"at": "%s", "status": 502, "error": 7, "saved": 0}',
+    ('{"at": "%s", "status": 502, "error": 7, "upstream_down": true, "saved": 0}',
      "stamp-weather.json unreadable: error is 7"),
+    ('{"at": "%s", "status": 502, "error": null, "saved": 0}',
+     "stamp-weather.json unreadable: upstream_down is None"),
+    ('{"at": "%s", "status": 502, "error": null, "upstream_down": "yes", "saved": 0}',
+     "stamp-weather.json unreadable: upstream_down is 'yes'"),
+    ('{"at": "%s", "status": 502, "error": null, "upstream_down": true, "saved": "0"}',
+     "stamp-weather.json unreadable: saved is '0'"),
+    ("[" * 100000, "stamp-weather.json unreadable: RecursionError"),
 ])
 def test_bad_heartbeat_with_stale_weather_is_red(box, text, why):
     box.all_fresh().stale_weather(hours=3)
@@ -505,12 +512,24 @@ def test_bad_heartbeat_with_stale_weather_is_red(box, text, why):
     assert body["weather_poller_error"] == why
 
 
+@pytest.mark.parametrize("minutes_ahead, healthy", [(3, True), (10, False)])
+def test_heartbeat_from_the_future(box, minutes_ahead, healthy):
+    """A clock jump must not keep a dead poller's last stamp fresh for hours."""
+    box.all_fresh().stale_weather(hours=3)
+    box.heartbeat(utc_stamp_ago(minutes=-minutes_ahead), status=502, saved=0, down=True)
+    r, body = box.get()
+    if healthy:
+        assert_green(r, body, ["weather"])
+    else:
+        assert_red(r, body, "weather_poller")
+
+
 def test_heartbeat_symlink_is_not_followed(box, tmp_path):
     """data/ is writable by the poller user: a link there must not point the API elsewhere."""
     box.all_fresh().stale_weather(hours=3)
     elsewhere = tmp_path / "elsewhere.json"
     elsewhere.write_text(json.dumps({"at": utc_stamp_ago(minutes=4), "status": 502,
-                                     "error": None, "saved": 0}))
+                                     "error": None, "upstream_down": True, "saved": 0}))
     stamp = box.db.parent / "stamp-weather.json"
     stamp.unlink()
     stamp.symlink_to(elsewhere)

@@ -13,13 +13,25 @@ from config import DB_PATH, AWDB_API_URL, WEATHER_STATIONS
 # The name must never match the nightly backup sweep's traffic*.db*.
 STAMP_PATH = Path(DB_PATH).parent / "stamp-weather.json"
 
+# The snow source failing on its side: no answer at all (timeout, refused or dropped
+# connection, TLS), a server error, or a 404, which SNOTEL also gives while it is down
+# (8.5 h of them on 2026-01-26 with no change on our side). Anything else that leaves no
+# row (another 4xx, a body we cannot use, our own exception) is ours to fix.
+UNREACHABLE = (requests.exceptions.ConnectionError, requests.exceptions.Timeout,
+               requests.exceptions.ChunkedEncodingError)
+
+
+def upstream_is_down(status):
+    return status is not None and (status >= 500 or status == 404)
+
 
 def fetch_snotel_data(station):
     """Fetch current weather data from SNOTEL station.
 
     Returns (reading or None, upstream): upstream is {"status": the HTTP status, if one came
-    back, "error": the exception class name, if one was raised}. Never the response body."""
-    upstream = {"status": None, "error": None}
+    back, "error": the exception class name, if one was raised, "down": whether the snow
+    source failed on its side}. Never the response body."""
+    upstream = {"status": None, "error": None, "down": False}
     try:
         params = {
             "stationTriplets": station["triplet"],
@@ -31,6 +43,7 @@ def fetch_snotel_data(station):
 
         response = requests.get(AWDB_API_URL, params=params, timeout=30)
         upstream["status"] = response.status_code
+        upstream["down"] = upstream_is_down(response.status_code)
 
         if response.status_code != 200:
             print(f"ERROR: SNOTEL API returned status {response.status_code}")
@@ -89,6 +102,7 @@ def fetch_snotel_data(station):
 
     except requests.exceptions.RequestException as e:
         upstream["error"] = type(e).__name__
+        upstream["down"] = upstream["status"] is None and isinstance(e, UNREACHABLE)
         print(f"ERROR fetching SNOTEL data: {e}")
         return None, upstream
     except Exception as e:
@@ -101,7 +115,8 @@ def write_stamp(upstream, saved):
     """The run's heartbeat for /health. A failure here is printed, never raised: the
     reading matters more than the stamp, and a stamp that stops changing turns /health red."""
     stamp = {"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-             "status": upstream["status"], "error": upstream["error"], "saved": saved}
+             "status": upstream["status"], "error": upstream["error"],
+             "upstream_down": upstream["down"], "saved": saved}
     tmp = STAMP_PATH.with_name(f".{STAMP_PATH.name}.{os.getpid()}.tmp")
     try:
         tmp.write_text(json.dumps(stamp) + "\n")
@@ -191,7 +206,7 @@ def main():
 
     records_saved = 0
     # Stays "nothing fetched" if no station is polled: /health reads that as our failure
-    upstream = {"status": None, "error": None}
+    upstream = {"status": None, "error": None, "down": False}
 
     try:
         # Fetch data for all configured weather stations (one today; the stamp keeps the last)
