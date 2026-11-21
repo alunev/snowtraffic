@@ -43,7 +43,7 @@ OLD_ROBOTS = "User-agent: *\nDisallow: /api/\n"
 
 def parse_robots(text):
     """The (allow, pattern) rules of the `User-agent: *` group, and the Sitemap URLs."""
-    rules, sitemaps, in_star = [], [], False
+    rules, sitemaps, agents, in_star = [], [], [], False
     for line in text.splitlines():
         line = line.split("#", 1)[0].strip()
         if ":" not in line:
@@ -51,11 +51,14 @@ def parse_robots(text):
         field, value = (part.strip() for part in line.split(":", 1))
         field = field.lower()
         if field == "user-agent":
+            agents.append(value)
             in_star = value == "*"
         elif field == "sitemap":
             sitemaps.append(value)
         elif field in ("allow", "disallow") and in_star and value:
             rules.append((field == "allow", value))
+    # One group for every crawler alike: a crawler-specific group would need its own reading.
+    assert agents == ["*"], f"User-agent lines: {agents}"
     return rules, sitemaps
 
 
@@ -76,7 +79,8 @@ def allowed(rules, url):
 def first_load_api_urls():
     """Every fetch() URL in ui/src, with its ${...} placeholders filled in."""
     urls, calls = [], 0
-    for src in sorted((UI / "src").rglob("*.jsx")):
+    sources = (p for p in (UI / "src").rglob("*") if p.suffix in (".js", ".jsx", ".ts", ".tsx"))
+    for src in sorted(sources):
         text = src.read_text()
         calls += len(re.findall(r"\bfetch\(", text))
         for template in re.findall(r"fetch\(`\$\{API_BASE_URL\}(/[^`]*)`", text):
@@ -101,6 +105,10 @@ def test_matcher_longest_rule_wins():
     assert allowed(rules, "/a/c?x=1")
     assert not allowed(rules, "/a/d")
     assert allowed(rules, "/other")
+    rules, _ = parse_robots("User-agent: *\nDisallow: /t\nAllow: /t\nAllow: /s/*/x$\nAllow: /q?a\nDisallow: /\n")
+    assert allowed(rules, "/t")  # a tie goes to Allow
+    assert allowed(rules, "/s/any/x") and not allowed(rules, "/s/any/y")
+    assert allowed(rules, "/q?a=1") and not allowed(rules, "/qa")  # ? is literal
 
 
 def test_ui_fetches_the_five_first_load_paths():
@@ -147,11 +155,15 @@ class Head(HTMLParser):
         super().__init__()
         self.meta, self.links, self.scripts, self.styled = {}, {}, [], []
         self.text = {"title": "", "noscript": ""}
+        self.handlers, self.urls = [], []
         self.open = set()
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
         self.open.add(tag)
+        self.handlers += [f"{tag} {k}" for k in a if k.startswith("on")]
+        if a.get("rel") != "canonical":
+            self.urls += [a[k] for k in ("src", "href") if k in a]
         if "style" in a or tag == "style":
             self.styled.append(tag)
         if tag == "meta" and ("name" in a or "property" in a):
@@ -193,8 +205,10 @@ def test_index_canonical_and_card_tags(head):
 
 def test_index_needs_no_csp_change(head):
     """The CSP is default-src 'self' with no inline script or style: every script has a
-    src on this origin, nothing carries a style, and the icon is a file the build ships."""
-    assert head.scripts and all(s.get("src", "").startswith("/") for s in head.scripts)
-    assert head.styled == []
+    src on this origin, no tag carries a style or an on* handler, every src and href but the
+    canonical is a path on this origin, and the icon is a file the build ships."""
+    assert head.scripts and all(s.get("src") for s in head.scripts)
+    assert head.urls and [u for u in head.urls if not u.startswith("/") or u.startswith("//")] == []
+    assert head.styled == [] and head.handlers == []
     icon = head.links["icon"]
     assert icon.startswith("/") and (PUBLIC / icon.lstrip("/")).is_file()
